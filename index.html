@@ -1,0 +1,944 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3e%3cpath d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z' /%3e%3c/svg%3e" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Quiz Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              primary: {
+                DEFAULT: '#22d3ee', // cyan-400
+                light: '#67e8f9',   // cyan-300
+                dark: '#06b6d4',    // cyan-500
+              },
+              secondary: '#10b981', // green for correct answers
+              background: '#0d1117', // dark charcoal
+              surface: '#161b22',    // slightly lighter dark
+              onPrimary: '#0d1117',  // dark text on bright primary button
+              onSurface: '#e6edf3',  // light gray text
+              onSurfaceSecondary: '#8b949e', // dimmer gray text
+              error: '#f87171',      // red-400
+            },
+            animation: {
+              'spin-slow': 'spin 1.5s linear infinite',
+              'pulse-fast': 'pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+            },
+             boxShadow: {
+              'glow-primary': '0 0 8px rgba(34, 211, 238, 0.4), 0 0 20px rgba(34, 211, 238, 0.2)',
+              'glow-primary-lg': '0 0 15px rgba(34, 211, 238, 0.5), 0 0 35px rgba(34, 211, 238, 0.3)',
+            }
+          }
+        }
+      }
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script type="importmap">
+    {
+      "imports": {
+        "@google/genai": "https://aistudiocdn.com/@google/genai@^1.18.0"
+      }
+    }
+    </script>
+    <style>
+      .hidden { display: none !important; }
+      body {
+        background-color: #0d1117; /* Matches theme.background */
+        background-image: 
+          radial-gradient(circle at center, rgba(34, 211, 238, 0.07) 0%, transparent 40%);
+        background-size: 100vw 100vh;
+        background-repeat: no-repeat;
+        background-attachment: fixed;
+      }
+    </style>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body class="bg-background text-onSurface">
+    <div id="app">
+        <header class="bg-surface/80 backdrop-blur-sm border-b border-slate-700 p-4 sticky top-0 z-10">
+            <div class="container mx-auto flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="h-8 w-8 text-primary">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z" />
+                    </svg>
+                    <h1 class="text-xl font-bold tracking-tight text-onSurface">AI Quiz Generator</h1>
+                </div>
+                <button id="history-button" class="flex items-center gap-2 text-onSurfaceSecondary hover:text-primary font-semibold py-2 px-3 rounded-lg transition-colors hover:bg-slate-800" aria-label="View quiz history">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-5 w-5"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m9 9.375a9 9 0 01-9-9m9 9h3.375c.621 0 1.125-.504 1.125-1.125V9.375c0-4.06-2.936-7.5-6.936-7.5H6.75" /></svg>
+                    <span class="hidden sm:inline">History</span>
+                </button>
+            </div>
+        </header>
+
+        <div id="history-modal-container"></div>
+        
+        <main id="app-root" class="container mx-auto p-4 md:p-8">
+            <!-- App content will be rendered here -->
+        </main>
+
+        <footer class="text-center py-6 text-slate-500 text-sm">
+            <p>Powered by Google Gemini. Built for education and learning.</p>
+        </footer>
+    </div>
+
+    <!-- This is used for PDF generation and is not visible to the user -->
+    <div id="pdf-content-container" style="display: none; position: absolute; left: -9999px;"></div>
+
+    <script type="module">
+        import { GoogleGenAI, Type } from '@google/genai';
+
+        // --- GLOBAL STATE ---
+        const HISTORY_KEY = 'aiQuizGeneratorHistory';
+        let state = {
+            fileData: null,
+            pastedText: '',
+            sourceTab: 'upload', // 'upload' or 'text'
+            styleGuides: [],
+            quizConfig: {
+                numQuestions: 10,
+                questionTypes: ['multiple_choice'],
+                difficulty: 'medium',
+            },
+            activeQuiz: null,
+            appState: 'idle', // 'idle', 'loading', 'results', 'error'
+            error: null,
+            quizHistory: [],
+            isHistoryModalOpen: false,
+        };
+
+        // --- DOM ELEMENTS ---
+        const appRoot = document.getElementById('app-root');
+        const historyButton = document.getElementById('history-button');
+        const historyModalContainer = document.getElementById('history-modal-container');
+        const pdfContentContainer = document.getElementById('pdf-content-container');
+
+        // --- ICONS (SVG Strings) ---
+        const ICONS = {
+            sparkles: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-6 w-6"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" /></svg>`,
+            upload: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="mx-auto h-12 w-12 text-onSurfaceSecondary"><path stroke-linecap="round" stroke-linejoin="round" d="M12 16.5V9.75m0 0l-3.75 3.75M12 9.75l3.75 3.75M3 17.25V6.75A2.25 2.25 0 015.25 4.5h13.5A2.25 2.25 0 0121 6.75v10.5a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 17.25z" /></svg>`,
+            checkCircle: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-12 w-12"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>`,
+            file: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-5 w-5 text-onSurfaceSecondary flex-shrink-0"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" /></svg>`,
+            x: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-4 w-4 text-onSurfaceSecondary"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>`,
+            target: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-12 w-12 text-primary mx-auto mb-3"><path stroke-linecap="round" stroke-linejoin="round" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.82m5.84-2.56a14.95 14.95 0 00-5.84-2.56m0 0a14.95 14.95 0 00-2.56-5.84m-2.56 5.84a6 6 0 017.38-5.84m-2.56 5.84l-2.56-2.56" /></svg>`,
+            refresh: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-5 w-5"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0011.487-11.486M2.985 19.644L6.166 16.46" /></svg>`,
+            copy: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-5 w-5"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375V9.375a2.25 2.25 0 00-2.25-2.25H13.5A2.25 2.25 0 0011.25 9.375v9.75" /></svg>`,
+            download: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-5 w-5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 8.25H7.5a2.25 2.25 0 00-2.25 2.25v9a2.25 2.25 0 002.25 2.25h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25H15M9 12l3 3m0 0l3-3m-3 3V2.25" /></svg>`,
+            xCircle: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-6 w-6 text-error flex-shrink-0"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>`,
+            greenCheckCircle: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-6 w-6 text-secondary flex-shrink-0"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>`,
+            loaderSpinner: `<svg class="animate-spin h-5 w-5 text-onPrimary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`,
+        };
+
+        // --- GEMINI SERVICE ---
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+        const getResponseSchema = () => ({
+            type: Type.ARRAY,
+            items: {
+                type: Type.OBJECT,
+                properties: {
+                    question: { type: Type.STRING, description: 'The question text.' },
+                    type: { type: Type.STRING, description: 'The type of question.', enum: ['multiple_choice', 'true_false', 'short_answer'] },
+                    options: { type: Type.ARRAY, description: 'An array of 4 options for a multiple choice question. Must be empty for other question types.', items: { type: Type.STRING } },
+                    answer: { type: Type.STRING, description: 'The correct answer. For multiple choice, this must be one of the provided options.' },
+                    explanation: { type: Type.STRING, description: 'A brief explanation of why the answer is correct.' }
+                },
+                required: ['question', 'type', 'answer'],
+            },
+        });
+
+        async function generateQuizFromDocument(fileContent, mimeType, config, styleGuides) {
+            const { numQuestions, questionTypes, difficulty } = config;
+            let prompt = `You are an expert quiz creator. Your task is to generate a quiz from the provided main source document. Instructions: 1. Carefully analyze the content of the main source document. 2. Generate exactly ${numQuestions} high-quality quiz questions based on the key information in the source document. 3. The question types should be a mix of: ${questionTypes.join(', ')}. 4. For 'multiple_choice' questions, provide exactly 4 distinct options, one of which must be the correct answer. 5. For 'true_false' questions, the question should be a statement that can be definitively answered with "True" or "False". 6. For 'short_answer' questions, the question should require a concise, factual answer from the text. 7. Ensure the 'answer' field is always populated with the correct answer. For multiple choice, the answer must exactly match one of the options. 8. For each question, provide a brief 'explanation' for why the correct answer is correct. 9. The questions should cover a broad range of topics from the source document. 10. The overall difficulty level for the questions must be '${difficulty}'. 11. Adhere strictly to the provided JSON schema for your response.`;
+            if (styleGuides.length > 0) {
+                prompt += `\n\nContextual Analysis Instructions: Use the provided style guide documents to understand the desired format, phrasing, and key concepts. IMPORTANT: Your primary source for quiz content is the main document. The style guide documents are for context, format, and focus ONLY.`;
+            }
+            const parts = [{ text: prompt }, { inlineData: { data: fileContent, mimeType } }];
+            if (styleGuides.length > 0) {
+                parts.push({ text: "\n--- STYLE GUIDE DOCUMENTS ---\n" });
+                styleGuides.forEach(guide => parts.push({ inlineData: { data: guide.content, mimeType: guide.mimeType } }));
+            }
+            try {
+                const response = await ai.models.generateContent({
+                    model: 'gemini-2.5-flash',
+                    contents: { parts },
+                    config: {
+                        responseMimeType: "application/json",
+                        responseSchema: getResponseSchema(),
+                        temperature: 0.7,
+                    }
+                });
+                const jsonText = response.text.trim();
+                const generatedQuestions = JSON.parse(jsonText);
+                if (!Array.isArray(generatedQuestions)) {
+                    throw new Error("API did not return a valid array of questions.");
+                }
+                return generatedQuestions;
+            } catch (error) {
+                console.error('Error generating quiz from Gemini:', error);
+                let message = 'An unknown error occurred while generating the quiz.';
+                if (error instanceof Error) message = error.message;
+                const errorString = error.toString();
+                if (errorString.includes('SAFETY')) message = "The request was blocked due to safety settings. The document might contain sensitive content.";
+                else if (errorString.includes('400')) message = "Invalid request. The document format might be unsupported or corrupted.";
+                throw new Error(message);
+            }
+        }
+
+        // --- TEMPLATE GENERATORS (HTML as strings) ---
+        function getInitialViewHTML() {
+            const { numQuestions, difficulty, questionTypes } = state.quizConfig;
+            const isGenerateDisabled = (state.sourceTab === 'upload' && !state.fileData) || (state.sourceTab === 'text' && !state.pastedText.trim());
+            return `
+                <div class="max-w-4xl mx-auto">
+                    <div class="text-center mb-12">
+                        <h2 class="text-3xl md:text-4xl font-extrabold text-onSurface mb-2">Create Quizzes Instantly</h2>
+                        <p class="text-lg text-onSurfaceSecondary max-w-2xl mx-auto">Upload a document or paste text, choose your settings, and let AI generate a quiz in seconds.</p>
+                    </div>
+                    <div class="space-y-8">
+                        ${getFileUploadHTML()}
+                        ${getStyleGuideUploadHTML()}
+                        ${getQuizConfiguratorHTML(numQuestions, difficulty, questionTypes)}
+                        ${state.error ? `<div class="text-center text-error bg-red-500/10 p-3 rounded-md">${state.error}</div>` : ''}
+                        <div class="grid grid-cols-1 gap-4">
+                            <button id="generate-quiz-btn" ${isGenerateDisabled ? 'disabled' : ''} class="w-full bg-primary hover:bg-primary-dark text-onPrimary font-bold py-4 px-6 rounded-lg shadow-glow-primary hover:shadow-glow-primary-lg transition-all duration-300 ease-in-out flex items-center justify-center gap-2 disabled:bg-slate-600 disabled:text-slate-400 disabled:shadow-none disabled:cursor-not-allowed">
+                                ${ICONS.sparkles}
+                                <span>Generate Quiz</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        function getFileUploadHTML() {
+             const isUploadTab = state.sourceTab === 'upload';
+            const isTextTab = state.sourceTab === 'text';
+            const uploadTabClasses = isUploadTab ? 'bg-primary text-onPrimary shadow' : 'bg-transparent text-onSurfaceSecondary hover:bg-slate-700';
+            const textTabClasses = isTextTab ? 'bg-primary text-onPrimary shadow' : 'bg-transparent text-onSurfaceSecondary hover:bg-slate-700';
+            return `
+                <div class="bg-surface/50 backdrop-blur-lg rounded-lg border border-slate-700 p-6">
+                  <h3 class="text-lg font-semibold text-onSurface mb-4">1. Provide Source Material</h3>
+                    <div class="mb-4 flex rounded-lg bg-background p-1">
+                        <button id="source-tab-upload" class="w-1/2 text-center font-semibold py-2 px-3 rounded-md transition-colors text-sm ${uploadTabClasses}">
+                        Upload File
+                        </button>
+                        <button id="source-tab-text" class="w-1/2 text-center font-semibold py-2 px-3 rounded-md transition-colors text-sm ${textTabClasses}">
+                        Paste Text
+                        </button>
+                    </div>
+
+                    <div id="upload-content" class="${isUploadTab ? '' : 'hidden'}">
+                        <label id="drop-zone" class="flex justify-center w-full h-48 px-6 pt-5 pb-6 border-2 border-slate-600 border-dashed rounded-md cursor-pointer transition-colors duration-200 ease-in-out bg-background/50 hover:bg-surface/50">
+                            <div class="space-y-2 text-center my-auto">
+                                ${state.fileData ? `
+                                    <div class="flex flex-col items-center text-secondary">
+                                        ${ICONS.checkCircle}
+                                        <p class="text-lg font-semibold">${state.fileData.name}</p>
+                                        <p class="text-sm text-onSurfaceSecondary">File ready!</p>
+                                    </div>
+                                ` : `
+                                    ${ICONS.upload}
+                                    <div class="flex text-sm text-onSurfaceSecondary">
+                                        <p class="pl-1">Drag and drop a file or <span class="font-semibold text-primary">browse</span></p>
+                                        <input id="file-upload" type="file" class="sr-only" accept=".pdf,.txt,.docx" />
+                                    </div>
+                                    <p class="text-xs text-onSurfaceSecondary">PDF, DOCX, or TXT</p>
+                                `}
+                            </div>
+                        </label>
+                        <p id="file-upload-error" class="mt-2 text-sm text-error"></p>
+                    </div>
+
+                    <div id="text-content" class="${isTextTab ? '' : 'hidden'}">
+                        <textarea id="text-input" class="w-full h-48 p-3 border-2 bg-background border-slate-600 text-onSurface rounded-md focus:ring-primary focus:border-primary transition-colors resize-y placeholder-slate-500">${state.pastedText || ''}</textarea>
+                        <p class="text-right text-sm text-onSurfaceSecondary mt-1">${(state.pastedText || '').length.toLocaleString()} characters</p>
+                    </div>
+                </div>`;
+        }
+
+        function getStyleGuideUploadHTML() {
+            return `
+                <div class="bg-surface/50 backdrop-blur-lg rounded-lg border border-slate-700 p-6">
+                    <h3 class="text-lg font-semibold text-onSurface mb-1">2. Add Style Guides (Optional)</h3>
+                    <p class="text-sm text-onSurfaceSecondary mb-4">Upload past quizzes or notes to help the AI match question format and style.</p>
+                    <div id="style-guide-files-list" class="space-y-2 mb-4">
+                        ${state.styleGuides.map(file => `
+                            <div class="flex items-center justify-between bg-background p-2 rounded-md">
+                                <div class="flex items-center gap-2 overflow-hidden">
+                                    ${ICONS.file}
+                                    <span class="text-sm font-medium text-onSurface truncate" title="${file.name}">${file.name}</span>
+                                </div>
+                                <button class="style-guide-remove-btn p-1 rounded-full hover:bg-slate-700 flex-shrink-0 ml-2" data-filename="${file.name}">
+                                    ${ICONS.x}
+                                    <span class="sr-only">Remove ${file.name}</span>
+                                </button>
+                            </div>
+                        `).join('')}
+                    </div>
+                    ${state.styleGuides.length < 5 ? `
+                        <label id="style-guide-drop-zone" class="flex justify-center w-full h-32 px-6 pt-5 pb-6 border-2 border-slate-600 border-dashed rounded-md cursor-pointer transition-colors duration-200 ease-in-out bg-background/50 hover:bg-surface/50">
+                            <div class="space-y-1 text-center my-auto">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="mx-auto h-10 w-10 text-onSurfaceSecondary"><path stroke-linecap="round" stroke-linejoin="round" d="M12 16.5V9.75m0 0l-3.75 3.75M12 9.75l3.75 3.75M3 17.25V6.75A2.25 2.25 0 015.25 4.5h13.5A2.25 2.25 0 0121 6.75v10.5a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 17.25z" /></svg>
+                                <div class="flex text-sm text-onSurfaceSecondary">
+                                    <p class="pl-1">Drag & drop or <span class="font-semibold text-primary">browse</span> to add files</p>
+                                    <input id="style-guide-upload" type="file" multiple class="sr-only" accept=".pdf,.txt,.docx">
+                                </div>
+                                <p class="text-xs text-onSurfaceSecondary">Up to ${5 - state.styleGuides.length} more files</p>
+                            </div>
+                        </label>
+                    ` : ''}
+                    <p id="style-guide-upload-error" class="mt-2 text-sm text-error"></p>
+                </div>
+            `;
+        }
+
+        function getQuizConfiguratorHTML(numQuestions, difficulty, questionTypes) {
+            const questionTypeOptions = [
+                { id: 'multiple_choice', label: 'Multiple Choice' },
+                { id: 'true_false', label: 'True / False' },
+                { id: 'short_answer', label: 'Short Answer' },
+            ];
+            const difficultyOptions = [
+                { id: 'easy', label: 'Easy' },
+                { id: 'medium', label: 'Medium' },
+                { id: 'hard', label: 'Hard' },
+            ];
+            return `
+                <div class="bg-surface/50 backdrop-blur-lg rounded-lg border border-slate-700 p-6">
+                    <h3 class="text-lg font-semibold text-onSurface mb-4">3. Configure Quiz</h3>
+                    <div class="space-y-6">
+                        <div>
+                            <label for="numQuestions" class="block text-sm font-medium text-onSurface">Number of Questions (<span id="num-questions-label">${numQuestions}</span>)</label>
+                            <input id="numQuestions" type="range" min="5" max="100" step="5" value="${numQuestions}" class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary mt-2">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-onSurface">Difficulty Level</label>
+                            <div id="difficulty-options" class="mt-2 grid grid-cols-3 gap-2 rounded-lg bg-background p-1">
+                                ${difficultyOptions.map(option => `
+                                    <button data-difficulty="${option.id}" class="difficulty-btn w-full text-center font-semibold py-2 px-3 rounded-md transition-colors text-sm ${difficulty === option.id ? 'bg-primary text-onPrimary shadow' : 'bg-transparent text-onSurfaceSecondary hover:bg-slate-700'}">
+                                        ${option.label}
+                                    </button>
+                                `).join('')}
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-onSurface">Question Types</label>
+                            <div class="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                ${questionTypeOptions.map(option => `
+                                    <label class="flex items-center space-x-3 p-3 rounded-lg border-2 cursor-pointer transition-all ${questionTypes.includes(option.id) ? 'border-primary bg-primary/10' : 'border-slate-600 bg-surface'}">
+                                        <input type="checkbox" data-question-type="${option.id}" ${questionTypes.includes(option.id) ? 'checked' : ''} class="question-type-cb h-4 w-4 text-primary bg-slate-700 focus:ring-primary border-slate-500 rounded">
+                                        <span class="font-medium text-onSurface">${option.label}</span>
+                                    </label>
+                                `).join('')}
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+        }
+
+        function getLoaderHTML() {
+            return `
+                <div class="max-w-4xl mx-auto">
+                    <div class="flex flex-col items-center justify-center text-center p-12 bg-surface/50 backdrop-blur-lg rounded-lg border border-slate-700">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-12 w-12 text-primary animate-pulse-fast"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" /></svg>
+                        <h2 class="mt-4 text-xl font-semibold text-onSurface">Generating Your Quiz...</h2>
+                        <p class="mt-2 text-onSurfaceSecondary">AI is analyzing your document. This might take a moment.</p>
+                    </div>
+                </div>`;
+        }
+        
+        function getQuizHTML() {
+            const { questions, currentQuestionIndex, userAnswers } = state.activeQuiz;
+            const currentQuestion = questions[currentQuestionIndex];
+            const selectedAnswer = userAnswers[currentQuestionIndex];
+            
+            const getQuestionCard = (question, selected, isReviewMode = false, questionNumber = 0) => {
+                let optionsHTML = '';
+                if (question.type === 'multiple_choice' && question.options) {
+                    optionsHTML = `<div class="space-y-3 mb-4">
+                        ${question.options.map((option, i) => {
+                            const isSelected = option === selected;
+                            const letter = String.fromCharCode(65 + i);
+                            const buttonClasses = `group w-full text-left p-4 rounded-lg transition-all duration-200 flex items-center gap-4 text-onSurface bg-surface/80 ${isSelected ? 'ring-2 ring-primary bg-slate-700/50' : 'hover:bg-slate-700/50'}`;
+                            const letterClasses = `h-8 w-8 rounded-full flex-shrink-0 flex items-center justify-center font-bold text-sm transition-colors ${isSelected ? 'bg-primary text-onPrimary' : 'bg-slate-700 text-onSurfaceSecondary group-hover:bg-slate-600 group-hover:text-onSurface'}`;
+                            return `<button data-answer="${option}" class="mc-option-btn ${buttonClasses}">${letter !== null ? `<span class="${letterClasses}">${letter}</span>` : ''}<span class="font-medium flex-grow">${option}</span></button>`;
+                        }).join('')}
+                    </div>`;
+                } else {
+                    optionsHTML = `<div class="text-center"><p class="text-onSurfaceSecondary text-sm italic">The answer will be revealed after you submit the quiz.</p></div>`;
+                }
+
+                return `
+                    <h3 class="text-2xl md:text-3xl mb-8 text-left min-h-32 leading-relaxed whitespace-pre-line font-bold text-onSurface">${question.question}</h3>
+                    ${optionsHTML}
+                `;
+            };
+
+            return `<div class="max-w-4xl mx-auto">
+                <div class="bg-black/40 backdrop-blur-xl p-4 sm:p-8 rounded-2xl border border-slate-700 w-full">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-xl font-bold text-onSurface">AI Generated Quiz</h2>
+                        <div class="text-md font-semibold text-onSurfaceSecondary bg-surface px-3 py-1 rounded-full">${currentQuestionIndex + 1} / ${questions.length}</div>
+                    </div>
+                    <div id="question-card-container">
+                        ${getQuestionCard(currentQuestion, selectedAnswer)}
+                    </div>
+                    <div class="mt-8 flex justify-between items-center">
+                        <button id="prev-btn" ${currentQuestionIndex === 0 ? 'disabled' : ''} class="bg-surface hover:bg-slate-700 text-onSurface font-bold py-3 px-6 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed">Previous</button>
+                        ${currentQuestionIndex === questions.length - 1 
+                            ? `<button id="submit-btn" class="bg-primary hover:bg-primary-dark text-onPrimary font-bold py-3 px-6 rounded-lg transition-all shadow-glow-primary hover:shadow-glow-primary-lg">Submit Quiz</button>`
+                            : `<button id="next-btn" class="bg-surface hover:bg-slate-700 text-onSurface font-bold py-3 px-6 rounded-lg transition">Next</button>`
+                        }
+                    </div>
+                </div>
+              </div>
+            `;
+        }
+
+        function getResultsHTML() {
+            const { questions, userAnswers, score } = state.activeQuiz;
+            const total = questions.length;
+            const percentage = total > 0 ? Math.round((score / total) * 100) : 0;
+            let message = "Keep practicing!";
+            if (percentage >= 90) message = "Excellent work!";
+            else if (percentage >= 75) message = "Great job!";
+            else if (percentage >= 50) message = "Good effort!";
+
+            const getReviewQuestionCard = (question, userAnswer, questionNumber) => {
+                let optionsHTML = '';
+                 if (question.type === 'multiple_choice' && question.options) {
+                    optionsHTML = `<div class="space-y-3 mb-4">
+                        ${question.options.map((option, i) => {
+                            const isCorrect = option === question.answer;
+                            const isSelected = option === userAnswer;
+                            const letter = String.fromCharCode(65 + i);
+                            
+                            let buttonClasses = 'group w-full text-left p-4 rounded-lg flex items-center gap-4 text-onSurface bg-surface/80 cursor-default';
+                            let letterClasses = 'bg-slate-700 text-onSurfaceSecondary';
+                            let iconHTML = '';
+
+                            if (isCorrect) {
+                                buttonClasses += ' ring-2 ring-secondary';
+                                letterClasses = 'bg-secondary text-white';
+                                iconHTML = ICONS.greenCheckCircle;
+                            } else if (isSelected) {
+                                buttonClasses += ' ring-2 ring-error';
+                                letterClasses = 'bg-error text-white';
+                                iconHTML = ICONS.xCircle;
+                            } else {
+                                buttonClasses += ' opacity-50';
+                            }
+
+                            return `<div class="${buttonClasses}"><span class="h-8 w-8 rounded-full flex-shrink-0 flex items-center justify-center font-bold text-sm transition-colors ${letterClasses}">${letter}</span><span class="font-medium flex-grow">${option}</span>${iconHTML}</div>`;
+                        }).join('')}
+                    </div>`;
+                } else {
+                    optionsHTML = `<div class="mt-4 p-4 bg-surface text-secondary rounded-md border border-slate-700"><strong>Answer:</strong> ${question.answer}</div>`;
+                }
+
+                return `<div class="mb-8">
+                    <h3 class="font-bold text-onSurface text-xl mb-4 leading-relaxed whitespace-pre-line"><span class="text-primary mr-2">${questionNumber}.</span>${question.question}</h3>
+                    ${optionsHTML}
+                    ${question.explanation ? `<div class="mt-6 p-4 bg-background rounded-lg border border-slate-700"><h4 class="font-semibold text-onSurface mb-2">Explanation</h4><p class="text-onSurfaceSecondary">${question.explanation}</p></div>` : ''}
+                </div>`;
+            };
+
+            return `<div class="max-w-4xl mx-auto">
+                <div class="bg-black/40 backdrop-blur-xl p-4 sm:p-8 rounded-2xl border border-slate-700 w-full">
+                    <div class="bg-surface/80 rounded-lg border border-slate-700 p-6 text-center mb-6">
+                        ${ICONS.target}
+                        <h3 class="text-2xl font-bold text-onSurface">Quiz Complete!</h3>
+                        <p class="text-lg text-onSurfaceSecondary mt-2">${message}</p>
+                        <div class="my-4">
+                            <p class="text-4xl font-extrabold text-primary">${score} / ${total}</p>
+                            <p class="text-sm font-semibold text-onSurfaceSecondary">(${percentage}%)</p>
+                        </div>
+                        <button id="retake-btn" class="w-full sm:w-auto bg-primary hover:bg-primary-dark text-onPrimary font-bold py-3 px-6 rounded-lg shadow-glow-primary transition-transform transform hover:scale-105 flex items-center justify-center gap-2 mx-auto">
+                            ${ICONS.refresh}<span>Retake Quiz</span>
+                        </button>
+                    </div>
+                    <div class="my-8 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <button id="copy-text-btn" class="w-full bg-secondary/20 hover:bg-secondary/30 text-secondary font-bold py-3 px-5 rounded-lg transition-transform transform hover:scale-105 flex items-center justify-center gap-2">${ICONS.copy}<span>Copy Text</span></button>
+                        <button id="download-pdf-btn" class="w-full bg-purple-500/20 hover:bg-purple-500/30 text-purple-400 font-bold py-3 px-5 rounded-lg transition-transform transform hover:scale-105 flex items-center justify-center gap-2 disabled:bg-purple-400/20 disabled:text-purple-400/50 disabled:cursor-not-allowed disabled:transform-none">${ICONS.download}<span>Download PDF</span></button>
+                        <button id="new-quiz-btn" class="w-full bg-slate-700 hover:bg-slate-600 text-onSurface font-bold py-3 px-5 rounded-lg transition-transform transform hover:scale-105 flex items-center justify-center gap-2">${ICONS.refresh}<span>New Quiz</span></button>
+                    </div>
+                    <div class="border-t border-slate-700 pt-6">
+                        <h3 class="text-2xl font-bold text-onSurface mb-6 text-center">Review Your Answers</h3>
+                        ${questions.map((q, i) => getReviewQuestionCard(q, userAnswers[i], i + 1)).join('')}
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        function getHistoryModalHTML() {
+            if (!state.isHistoryModalOpen) return '';
+            const formatDate = (dateString) => new Date(dateString).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+            return `
+                <div id="history-modal-overlay" class="fixed inset-0 bg-slate-900/75 backdrop-blur-sm z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+                    <div class="bg-surface w-full max-w-2xl max-h-[90vh] rounded-xl shadow-2xl flex flex-col border border-slate-700">
+                        <header class="flex items-center justify-between p-4 border-b border-slate-700 flex-shrink-0">
+                            <h2 class="text-xl font-bold text-onSurface">Quiz History</h2>
+                            <button id="history-close-btn" class="p-2 rounded-full hover:bg-slate-700"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-6 w-6 text-onSurfaceSecondary"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg></button>
+                        </header>
+                        <div class="overflow-y-auto p-6 flex-grow">
+                            ${state.quizHistory.length === 0 ? `
+                                <div class="text-center py-12"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-12 w-12 mx-auto text-slate-600 mb-4"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0011.487-11.486M2.985 19.644L6.166 16.46" /></svg><h3 class="text-lg font-semibold text-onSurface">No History Yet</h3><p class="text-onSurfaceSecondary mt-1">Complete a quiz to see it here.</p></div>
+                            ` : `
+                                <ul class="space-y-4">
+                                    ${state.quizHistory.map(item => `
+                                        <li class="bg-background border border-slate-700 rounded-lg p-4 transition-colors hover:border-primary">
+                                            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between">
+                                                <div><p class="font-bold text-primary truncate" title="${item.sourceName}">${item.sourceName}</p><p class="text-sm text-onSurfaceSecondary">${formatDate(item.date)}</p></div>
+                                                <p class="text-lg font-extrabold text-onSurface mt-2 sm:mt-0">Score: ${item.score} / ${item.total}</p>
+                                            </div>
+                                            <div class="mt-4 flex flex-col sm:flex-row sm:justify-end gap-3 border-t border-slate-700 pt-3">
+                                                <button data-history-id="${item.id}" data-is-reattempt="false" class="history-load-btn w-full sm:w-auto text-center font-semibold py-2 px-4 rounded-md transition-colors text-sm bg-slate-700 text-onSurface hover:bg-slate-600">View Results</button>
+                                                <button data-history-id="${item.id}" data-is-reattempt="true" class="history-load-btn w-full sm:w-auto text-center font-semibold py-2 px-4 rounded-md transition-colors text-sm bg-primary text-onPrimary hover:bg-primary-dark shadow">Re-attempt Quiz</button>
+                                            </div>
+                                        </li>
+                                    `).join('')}
+                                </ul>
+                            `}
+                        </div>
+                    </div>
+                </div>`;
+        }
+
+        function getPDFLayoutHTML() {
+            const { questions, userAnswers, score } = state.activeQuiz;
+            const total = questions.length;
+            const percentage = total > 0 ? Math.round((score / total) * 100) : 0;
+            return `<div style="width: 800px; padding: 40px; color: #1f2937; background-color: #ffffff; font-family: sans-serif;">
+                <div style="text-align: center; margin-bottom: 40px;"><h1 style="font-size: 2.5rem; font-weight: bold; color: #4f46e5; margin: 0;">Quiz Results</h1></div>
+                <div style="text-align: center; padding: 20px; background-color: #f8fafc; border-radius: 8px; margin-bottom: 40px; border: 1px solid #e2e8f0;"><h2 style="font-size: 1.8rem; font-weight: bold; margin: 0;">Final Score: ${score} / ${total} (${percentage}%)</h2></div>
+                ${questions.map((q, index) => {
+                    const userAnswer = userAnswers[index];
+                    let optionsContent = '';
+                    if (q.type === 'multiple_choice' && q.options) {
+                        optionsContent = q.options.map((option, optIndex) => {
+                            const isSelected = option === userAnswer;
+                            const isAnswer = option === q.answer;
+                            let style = 'padding: 12px; margin: 6px 0; border-radius: 6px; border: 1px solid #e2e8f0; display: flex; align-items: center; font-weight: 500;';
+                            let indicatorText = '';
+                            if (isAnswer) {
+                                style += 'background-color: #f0fdf4; border-color: #10b981; color: #065f46;';
+                                indicatorText = '✓ Correct Answer' + (isSelected ? ' (Your choice)' : '');
+                            } else if (isSelected) {
+                                style += 'background-color: #fef2f2; border-color: #ef4444; color: #991b1b;';
+                                indicatorText = '✗ Your Answer';
+                            } else {
+                                style += 'background-color: #f8fafc;';
+                            }
+                            return `<div style="${style}">
+                                <span style="margin-right: 12px; min-width: 20px; text-align: center; font-weight: bold;">${String.fromCharCode(65 + optIndex)}.</span>
+                                <span style="flex-grow: 1;">${option}</span>
+                                ${indicatorText ? `<span style="margin-left: 12px; font-size: 0.9rem; font-style: italic; flex-shrink: 0;">${indicatorText}</span>` : ''}
+                            </div>`;
+                        }).join('');
+                    } else {
+                         optionsContent = `<div style="margin: 8px 0; padding: 12px; background-color: #f8fafc; border-radius: 6px; border: 1px solid #e2e8f0;"><strong>Your Answer:</strong> ${userAnswer || 'Not answered'}</div>
+                                          <div style="margin: 8px 0; padding: 12px; border-radius: 6px; border: 1px solid ${userAnswer === q.answer ? '#10b981' : '#ef4444'}; background-color: ${userAnswer === q.answer ? '#f0fdf4' : '#fef2f2'};"><strong>Correct Answer:</strong> ${q.answer}</div>`;
+                    }
+
+                    return `<div style="margin-bottom: 30px; page-break-inside: avoid; border-top: 1px solid #e2e8f0; padding-top: 20px;">
+                        <p style="font-size: 1.2rem; font-weight: bold; margin-bottom: 15px;"><strong>${index + 1}.</strong> ${q.question}</p>
+                        ${optionsContent}
+                        ${q.explanation ? `<div style="margin-top: 15px; padding: 15px; background-color: #f1f5f9; border-radius: 5px; border-left: 4px solid #6366f1;"><strong style="color: #4338ca;">Explanation:</strong> ${q.explanation}</div>` : ''}
+                    </div>`;
+                }).join('')}
+            </div>`;
+        }
+
+        // --- EVENT HANDLERS & LOGIC ---
+        function setState(newState) {
+            state = { ...state, ...newState };
+            render();
+        }
+
+        async function handleGenerateQuiz() {
+            let sourceContent, sourceMimeType;
+
+            if (state.sourceTab === 'upload') {
+                if (!state.fileData) {
+                    setState({ error: 'Please upload a source document first.' });
+                    return;
+                }
+                sourceContent = state.fileData.content;
+                sourceMimeType = state.fileData.mimeType;
+            } else { // 'text' tab
+                if (!state.pastedText.trim()) {
+                    setState({ error: 'Please paste some text first.' });
+                    return;
+                }
+                sourceContent = btoa(unescape(encodeURIComponent(state.pastedText)));
+                sourceMimeType = 'text/plain';
+            }
+
+            if (state.quizConfig.questionTypes.length === 0) {
+                setState({ error: 'Please select at least one question type.' });
+                return;
+            }
+
+            setState({ appState: 'loading', error: null, activeQuiz: null });
+
+            try {
+                const generatedQuestions = await generateQuizFromDocument(sourceContent, sourceMimeType, state.quizConfig, state.styleGuides);
+                setState({
+                    appState: 'results',
+                    activeQuiz: {
+                        questions: generatedQuestions,
+                        sessionId: Date.now().toString(),
+                        currentQuestionIndex: 0,
+                        userAnswers: Array(generatedQuestions.length).fill(null),
+                        quizState: 'in_progress',
+                    },
+                });
+            } catch (err) {
+                console.error(err);
+                const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+                setState({ appState: 'error', error: `Failed to generate quiz. Error: ${errorMessage}` });
+            }
+        }
+        
+        function handleQuizComplete() {
+            const { questions, userAnswers, sessionId } = state.activeQuiz;
+            const score = userAnswers.reduce((acc, answer, i) => (answer === questions[i].answer ? acc + 1 : acc), 0);
+            
+            let sourceNameForHistory;
+            let fileDataForHistory;
+
+            if (state.sourceTab === 'upload' && state.fileData) {
+                sourceNameForHistory = state.fileData.name;
+                fileDataForHistory = state.fileData;
+            } else { // source was text
+                sourceNameForHistory = 'Pasted Text';
+                fileDataForHistory = {
+                    name: 'Pasted Text',
+                    content: btoa(unescape(encodeURIComponent(state.pastedText))),
+                    mimeType: 'text/plain',
+                    rawText: state.pastedText,
+                };
+            }
+
+            const newHistoryItem = {
+                id: sessionId,
+                date: new Date().toISOString(),
+                sourceName: sourceNameForHistory,
+                quizQuestions: questions,
+                userAnswers,
+                score,
+                total: questions.length,
+                fileData: fileDataForHistory,
+                quizConfig: state.quizConfig,
+            };
+
+            const updatedHistory = [newHistoryItem, ...state.quizHistory];
+            localStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
+
+            setState({
+                quizHistory: updatedHistory,
+                activeQuiz: { ...state.activeQuiz, quizState: 'submitted', score }
+            });
+        }
+        
+        function handleReset() {
+            setState({
+                fileData: null,
+                pastedText: '',
+                sourceTab: 'upload',
+                styleGuides: [],
+                activeQuiz: null,
+                appState: 'idle',
+                error: null,
+            });
+        }
+        
+        function handleLoadFromHistory(item, isReattempt) {
+            const isPastedText = !!item.fileData.rawText;
+            setState({
+                fileData: isPastedText ? null : item.fileData,
+                pastedText: isPastedText ? item.fileData.rawText : '',
+                sourceTab: isPastedText ? 'text' : 'upload',
+                quizConfig: item.quizConfig,
+                styleGuides: [],
+                activeQuiz: {
+                    questions: item.quizQuestions,
+                    sessionId: isReattempt ? Date.now().toString() : item.id,
+                    currentQuestionIndex: 0,
+                    userAnswers: isReattempt ? Array(item.quizQuestions.length).fill(null) : item.userAnswers,
+                    quizState: isReattempt ? 'in_progress' : 'submitted',
+                    score: isReattempt ? 0 : item.score,
+                },
+                appState: 'results',
+                isHistoryModalOpen: false,
+            });
+        }
+
+        // --- SETUP EVENT LISTENERS (for dynamically created content) ---
+        function setupInitialViewListeners() {
+            document.getElementById('generate-quiz-btn').addEventListener('click', handleGenerateQuiz);
+
+            // Source Tabs
+            document.getElementById('source-tab-upload').addEventListener('click', () => {
+                if (state.sourceTab !== 'upload') setState({ sourceTab: 'upload' });
+            });
+            document.getElementById('source-tab-text').addEventListener('click', () => {
+                if (state.sourceTab !== 'text') setState({ sourceTab: 'text' });
+            });
+            
+            // Text Input
+            const textInput = document.getElementById('text-input');
+            if(textInput) {
+                textInput.addEventListener('input', e => {
+                    setState({ pastedText: e.target.value });
+                });
+            }
+            
+            // File Upload
+            const fileUploadInput = document.getElementById('file-upload');
+            const dropZone = document.getElementById('drop-zone');
+            const errorP = document.getElementById('file-upload-error');
+            
+            const handleFile = (file) => {
+                if (!file) return;
+                const allowedTypes = ['application/pdf', 'text/plain', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+                if (!allowedTypes.includes(file.type)) {
+                    errorP.textContent = 'Invalid file type. Please upload a PDF, DOCX, or TXT file.';
+                    return;
+                }
+                errorP.textContent = '';
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const base64Content = e.target.result.split(',')[1];
+                    setState({ fileData: { name: file.name, content: base64Content, mimeType: file.type } });
+                };
+                reader.readAsDataURL(file);
+            };
+
+            fileUploadInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => dropZone.addEventListener(eventName, e => e.preventDefault()));
+            dropZone.addEventListener('drop', (e) => handleFile(e.dataTransfer.files[0]));
+
+            // Style Guides
+            const styleGuideInput = document.getElementById('style-guide-upload');
+            const styleGuideDropZone = document.getElementById('style-guide-drop-zone');
+            const styleGuideErrorP = document.getElementById('style-guide-upload-error');
+            
+            const handleStyleFiles = async (files) => {
+                let newFiles = [...state.styleGuides];
+                if (newFiles.length + files.length > 5) {
+                   styleGuideErrorP.textContent = 'Maximum of 5 style guides allowed.';
+                   return;
+                }
+                for (const file of files) {
+                    if (newFiles.some(f => f.name === file.name)) continue;
+                    const reader = new FileReader();
+                    const promise = new Promise((resolve, reject) => {
+                       reader.onload = e => resolve(e.target.result.split(',')[1]);
+                       reader.onerror = reject;
+                    });
+                    reader.readAsDataURL(file);
+                    const content = await promise;
+                    newFiles.push({ name: file.name, content, mimeType: file.type });
+                }
+                setState({ styleGuides: newFiles });
+            };
+            
+            if (styleGuideInput) {
+                styleGuideInput.addEventListener('change', e => handleStyleFiles(e.target.files));
+                ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => styleGuideDropZone.addEventListener(eventName, e => e.preventDefault()));
+                styleGuideDropZone.addEventListener('drop', e => handleStyleFiles(e.dataTransfer.files));
+            }
+            document.querySelectorAll('.style-guide-remove-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const filename = e.currentTarget.dataset.filename;
+                    setState({ styleGuides: state.styleGuides.filter(f => f.name !== filename) });
+                });
+            });
+
+
+            // Quiz Config
+            document.getElementById('numQuestions').addEventListener('input', e => {
+                const value = parseInt(e.target.value, 10);
+                document.getElementById('num-questions-label').textContent = value;
+                state.quizConfig.numQuestions = value; // Direct mutation for performance, re-render not needed
+            });
+            document.querySelectorAll('.difficulty-btn').forEach(btn => {
+                btn.addEventListener('click', e => {
+                    const difficulty = e.currentTarget.dataset.difficulty;
+                    setState({ quizConfig: { ...state.quizConfig, difficulty } });
+                });
+            });
+            document.querySelectorAll('.question-type-cb').forEach(cb => {
+                cb.addEventListener('change', e => {
+                    const type = e.target.dataset.questionType;
+                    const { questionTypes } = state.quizConfig;
+                    const newTypes = questionTypes.includes(type)
+                        ? questionTypes.filter(t => t !== type)
+                        : [...questionTypes, type];
+                    setState({ quizConfig: { ...state.quizConfig, questionTypes: newTypes } });
+                });
+            });
+        }
+        
+        function setupQuizListeners() {
+            document.getElementById('question-card-container').addEventListener('click', e => {
+                const button = e.target.closest('.mc-option-btn');
+                if (button) {
+                    const answer = button.dataset.answer;
+                    const { userAnswers, currentQuestionIndex } = state.activeQuiz;
+                    const newAnswers = [...userAnswers];
+                    newAnswers[currentQuestionIndex] = answer;
+                    setState({ activeQuiz: { ...state.activeQuiz, userAnswers: newAnswers } });
+                }
+            });
+
+            const nextBtn = document.getElementById('next-btn');
+            if (nextBtn) nextBtn.addEventListener('click', () => {
+                const { currentQuestionIndex, questions } = state.activeQuiz;
+                if (currentQuestionIndex < questions.length - 1) {
+                    setState({ activeQuiz: { ...state.activeQuiz, currentQuestionIndex: currentQuestionIndex + 1 } });
+                }
+            });
+
+            const prevBtn = document.getElementById('prev-btn');
+            if (prevBtn) prevBtn.addEventListener('click', () => {
+                const { currentQuestionIndex } = state.activeQuiz;
+                if (currentQuestionIndex > 0) {
+                    setState({ activeQuiz: { ...state.activeQuiz, currentQuestionIndex: currentQuestionIndex - 1 } });
+                }
+            });
+            
+            const submitBtn = document.getElementById('submit-btn');
+            if(submitBtn) submitBtn.addEventListener('click', handleQuizComplete);
+        }
+
+        function setupResultsListeners() {
+            document.getElementById('retake-btn').addEventListener('click', () => {
+                setState({ 
+                    activeQuiz: { 
+                        ...state.activeQuiz, 
+                        quizState: 'in_progress', 
+                        currentQuestionIndex: 0,
+                        userAnswers: Array(state.activeQuiz.questions.length).fill(null),
+                        score: 0,
+                    } 
+                });
+            });
+            document.getElementById('new-quiz-btn').addEventListener('click', handleReset);
+            
+            const copyBtn = document.getElementById('copy-text-btn');
+            copyBtn.addEventListener('click', () => {
+                const formattedQuiz = state.activeQuiz.questions.map((q, i) => {
+                    let text = `${i + 1}. ${q.question}\n`;
+                    if (q.type === 'multiple_choice' && q.options) text += q.options.map((opt, j) => `   ${String.fromCharCode(65 + j)}. ${opt}`).join('\n') + '\n';
+                    text += `Answer: ${q.answer}\n`;
+                    if (q.explanation) text += `Explanation: ${q.explanation}\n`;
+                    return text;
+                }).join('\n');
+                navigator.clipboard.writeText(formattedQuiz).then(() => {
+                    copyBtn.innerHTML = `${ICONS.greenCheckCircle}<span>Copied!</span>`;
+                    setTimeout(() => { copyBtn.innerHTML = `${ICONS.copy}<span>Copy Text</span>` }, 2000);
+                });
+            });
+
+            const downloadBtn = document.getElementById('download-pdf-btn');
+            downloadBtn.addEventListener('click', async () => {
+                if (downloadBtn.disabled) return;
+                downloadBtn.disabled = true;
+                downloadBtn.innerHTML = `${ICONS.loaderSpinner}<span>Downloading...</span>`;
+
+                pdfContentContainer.innerHTML = getPDFLayoutHTML();
+                pdfContentContainer.style.display = 'block';
+
+                try {
+                    const canvas = await html2canvas(pdfContentContainer.firstElementChild, { scale: 2 });
+                    const imgData = canvas.toDataURL('image/png');
+                    const pdf = new jspdf.jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
+                    const pdfWidth = pdf.internal.pageSize.getWidth();
+                    const imgHeight = canvas.height * pdfWidth / canvas.width;
+                    let heightLeft = imgHeight;
+                    let position = 0;
+                    pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, imgHeight);
+                    heightLeft -= pdf.internal.pageSize.getHeight();
+                    while (heightLeft > 0) {
+                        position -= pdf.internal.pageSize.getHeight();
+                        pdf.addPage();
+                        pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, imgHeight);
+                        heightLeft -= pdf.internal.pageSize.getHeight();
+                    }
+                    pdf.save('quiz-results.pdf');
+                } catch (error) {
+                    console.error("Error generating PDF:", error);
+                    alert("An error occurred while generating the PDF.");
+                } finally {
+                    pdfContentContainer.style.display = 'none';
+                    pdfContentContainer.innerHTML = '';
+                    downloadBtn.disabled = false;
+                    downloadBtn.innerHTML = `${ICONS.download}<span>Download PDF</span>`;
+                }
+            });
+        }
+        
+        function setupHistoryModalListeners() {
+            document.getElementById('history-close-btn')?.addEventListener('click', () => setState({ isHistoryModalOpen: false }));
+            document.getElementById('history-modal-overlay')?.addEventListener('click', (e) => {
+                if(e.target === e.currentTarget) setState({ isHistoryModalOpen: false });
+            });
+            document.querySelectorAll('.history-load-btn').forEach(btn => {
+                btn.addEventListener('click', e => {
+                    const id = e.currentTarget.dataset.historyId;
+                    const isReattempt = e.currentTarget.dataset.isReattempt === 'true';
+                    const item = state.quizHistory.find(h => h.id === id);
+                    if (item) handleLoadFromHistory(item, isReattempt);
+                });
+            });
+        }
+
+
+        // --- RENDER FUNCTION ---
+        function render() {
+            if (state.appState === 'idle' || state.appState === 'error') {
+                appRoot.innerHTML = getInitialViewHTML();
+                setupInitialViewListeners();
+            } else if (state.appState === 'loading') {
+                appRoot.innerHTML = getLoaderHTML();
+            } else if (state.appState === 'results') {
+                if (state.activeQuiz?.quizState === 'in_progress') {
+                    appRoot.innerHTML = getQuizHTML();
+                    setupQuizListeners();
+                } else {
+                    appRoot.innerHTML = getResultsHTML();
+                    setupResultsListeners();
+                }
+            }
+            historyModalContainer.innerHTML = getHistoryModalHTML();
+            if(state.isHistoryModalOpen) setupHistoryModalListeners();
+        }
+
+        // --- INITIALIZATION ---
+        function init() {
+            try {
+                const savedHistory = localStorage.getItem(HISTORY_KEY);
+                if (savedHistory) {
+                    state.quizHistory = JSON.parse(savedHistory);
+                }
+            } catch (e) {
+                console.error("Failed to load quiz history:", e);
+            }
+            historyButton.addEventListener('click', () => setState({ isHistoryModalOpen: true }));
+            render();
+        }
+
+        init();
+
+    </script>
+<script type="module" src="/index.tsx"></script>
+</body>
+</html>
